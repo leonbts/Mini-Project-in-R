@@ -1,0 +1,304 @@
+```{r}
+library(tidyverse)
+library(lubridate)
+df <- read.csv("Sample - Superstore.csv")
+colnames(df)
+head(df)
+```
+
+# Question 1: How does sales performance vary over time?
+
+### Identify which months consistently show sales peaks and find any unusual dips in the trend line
+
+```{r}
+df <- df %>%
+  mutate(
+    Order.Date = case_when(
+      str_detect(Order.Date, "/") ~ parse_date_time(Order.Date, orders = c("mdy", "dmy")),  # Handles both formats
+      TRUE ~ as.Date(Order.Date)  # Keep it unchanged if already in Date format
+    )
+  )
+```
+
+```{r}
+df <- df %>%
+  mutate(Month = format(Order.Date, "%m"))  # Ensures "01"-"12"
+
+monthly_sales <- df %>%
+  group_by(Month) %>%
+  summarise(Total_Sales = sum(Sales, na.rm = TRUE)) %>%
+  arrange(Month)
+
+# Ensure all 12 months appear
+all_months <- tibble(Month = sprintf("%02d", 1:12))
+
+monthly_sales <- full_join(all_months, monthly_sales, by = "Month") %>%
+  mutate(Total_Sales = replace_na(Total_Sales, 0))
+
+# Plot it
+ggplot(monthly_sales, aes(x = as.numeric(Month), y = Total_Sales)) +
+  geom_line(color = "cyan", linewidth = 1) +      
+  geom_point(color = "red", size = 2) +           
+  geom_smooth(method = "loess", formula = y ~ x, color = "orange", se = FALSE) +  
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +  
+  labs(title = "Total Sales by Month",
+       x = "Month",
+       y = "Total Sales") +
+  theme_minimal()
+```
+
+```{r}
+print(monthly_sales)
+```
+
+### Calculate YOY growth rate for the most recent complete year
+
+```{r}
+df <- df %>%
+  mutate(Year = format(Order.Date, "%Y"))  # Extract year
+
+yearly_sales <- df %>%
+  group_by(Year) %>%
+  summarise(Total_Sales = sum(Sales, na.rm = TRUE)) %>%
+  arrange(Year) %>%
+  mutate(YOY_Growth = (Total_Sales / lag(Total_Sales) - 1) * 100)  # YOY formula
+
+print(yearly_sales)
+```
+
+### Suggest potential reasons for seasonal patterns
+
+From what we see in the graph, possible reasons for sales patterns:
+
+📌 High Sales Months (Sep, Nov, Dec, maybe Mar/Oct):
+
+November-December → Black Friday + Christmas shopping (retail boom)\
+September-October → Back-to-school / Q4 business spending\
+March → New product releases? Tax refunds? Q1 spending?
+
+📌 Low Sales Months (Jan-Feb, Apr-Aug):
+
+January-February → Post-holiday dip (people spent too much in Nov/Dec)\
+April-August → Summer slowdown? Fewer business purchases?
+
+------------------------------------------------------------------------
+
+# Question 2: Which product categories have the best/worst profit margins?
+
+### Identify which category has the thinnest margins
+
+```{r}
+category_margins <- df %>%
+  group_by(Category) %>%
+  summarise(
+    Total_Sales = sum(Sales, na.rm = TRUE),
+    Total_Profit = sum(Profit, na.rm = TRUE),
+    Profit_Margin = (Total_Profit / Total_Sales) * 100
+  ) %>%
+  arrange(Profit_Margin)  # Sort from lowest to highest
+
+print(category_margins)
+```
+
+### Calculate the profit margin difference between top and bottom categories
+
+```{r}
+max_margin <- max(category_margins$Profit_Margin, na.rm = TRUE)
+min_margin <- min(category_margins$Profit_Margin, na.rm = TRUE)
+margin_difference <- max_margin - min_margin
+
+print(paste("Profit margin difference: ", round(margin_difference, 2), "%"))
+```
+
+### Suggest strategies to improve low-performing categories
+
+📌 If margins are low due to discounts:
+
+Reduce unnecessary discounts or promotions.\
+Focus on premium product lines with higher markups.
+
+📌 If margins are low due to high costs:
+
+Negotiate better supplier deals.\
+Optimize inventory management to reduce holding costs.
+
+📌 If sales are high but profit is low:
+
+Increase prices slightly if customers are price-insensitive.\
+Cross-sell high-margin accessories or services with these products.
+
+------------------------------------------------------------------------
+
+# Question 3: How do regional performances compare?
+
+### Identify which region has both high sales and high profitability and find any regions with negative profits
+
+```{r}
+region_performance <- df %>%
+  group_by(Region) %>%
+  summarise(
+    Total_Sales = sum(Sales, na.rm = TRUE),
+    Total_Profit = sum(Profit, na.rm = TRUE),
+    Profit_Margin = (Total_Profit / Total_Sales) * 100
+  ) %>%
+  arrange(desc(Total_Sales))  # Sort by highest sales first
+
+print(region_performance)
+```
+
+### Analyze if high sales always correlate with high profits
+
+```{r}
+ggplot(region_performance, aes(x = Total_Sales, y = Total_Profit, label = Region)) +
+  geom_point(color = "blue", size = 4) +  
+  geom_text(vjust = -0.5) +  
+  labs(title = "Sales vs. Profit by Region", x = "Total Sales", y = "Total Profit") +
+  theme_minimal()
+```
+
+### Propose regional-specific strategies based on findings
+
+📌 If a region has high sales but low profit:
+
+Reduce discounts or increase pricing in that region.\
+Improve operational efficiency to cut costs.
+
+📌 If a region has low sales but high profit margin:
+
+Expand market reach through promotions or partnerships.\
+Consider targeted marketing to increase volume.
+
+📌 If a region is losing money (negative profit):
+
+Investigate reasons (high discounts, expensive shipping, low demand).\
+Adjust pricing, remove unprofitable products, or optimize logistics.
+
+------------------------------------------------------------------------
+
+# Question 4: What does customer segmentation reveal?
+
+### Calculate percentage of customers in each segment
+
+```{r}
+# Find most recent order date
+max_date <- max(df$Order.Date, na.rm = TRUE)
+
+# Calculate RFM Metrics
+rfm <- df %>%
+  group_by(Customer.ID) %>%
+  summarise(
+    Recency = as.numeric(max_date - max(Order.Date)),  # Days since last purchase
+    Frequency = n_distinct(Order.ID),  # Total number of purchases
+    Monetary = sum(Sales, na.rm = TRUE)  # Total spent
+  )
+
+# Assign RFM Scores (1 = lowest, 5 = highest)
+rfm <- rfm %>%
+  mutate(
+    R_Score = ntile(-Recency, 5),  # Recent buyers get high scores
+    F_Score = ntile(Frequency, 5),  # Frequent buyers get high scores
+    M_Score = ntile(Monetary, 5)  # High spenders get high scores
+  ) %>%
+  mutate(RFM_Score = R_Score * 100 + F_Score * 10 + M_Score)  # Combine into a single score
+
+print(head(rfm))
+```
+
+```{r}
+rfm <- rfm %>%
+  mutate(Segment = case_when(
+    RFM_Score >= 555 ~ "Best Customers",
+    RFM_Score >= 450 ~ "Loyal Customers",
+    RFM_Score >= 350 ~ "Potential Loyalists",
+    RFM_Score >= 250 ~ "At Risk",
+    TRUE ~ "Lost Customers"
+  ))
+
+# Count % of customers in each segment
+segment_counts <- rfm %>%
+  group_by(Segment) %>%
+  summarise(Count = n()) %>%
+  mutate(Percentage = (Count / sum(Count)) * 100)
+
+print(segment_counts)
+```
+
+### Identify which segment generates the most revenue
+
+```{r}
+df <- df %>%
+  left_join(rfm, by = "Customer.ID")
+
+segment_revenue <- df %>%
+  inner_join(rfm, by = "Customer.ID") %>%
+  group_by(Segment) %>%
+  summarise(Total_Revenue = sum(Sales, na.rm = TRUE)) %>%
+  arrange(desc(Total_Revenue))
+
+print(segment_revenue)
+```
+
+### Strategies for Different Segments
+
+📌 Retention Strategies for “At Risk” Customers:
+
+Send personalized offers or discounts.\
+Re-engagement emails (e.g., “We miss you! Here’s 10% off”).\
+Check if they stopped buying due to pricing, product issues, or competition.
+
+📌 Marketing Approaches for “High Spenders” (Best/Loyal Customers):
+
+Offer exclusive deals, early access to new products.\
+Loyalty programs to reward them.\
+Encourage referrals (VIP referral bonuses).
+
+------------------------------------------------------------------------
+
+# Question 5: How does shipping mode affect profitability?
+
+### Compare profit margins across shipping modes
+
+```{r}
+shipping_performance <- df %>%
+  group_by(Ship.Mode) %>%
+  summarise(
+    Total_Sales = sum(Sales, na.rm = TRUE),
+    Total_Profit = sum(Profit, na.rm = TRUE),
+    Profit_Margin = (Total_Profit / Total_Sales) * 100
+  ) %>%
+  arrange(desc(Profit_Margin))  # Sort by highest profit margin
+
+print(shipping_performance)
+```
+
+### Calculate profit per order for each shipping mode
+
+```{r}
+profit_per_order <- df %>%
+  group_by(Ship.Mode) %>%
+  summarise(
+    Total_Orders = n_distinct(Order.ID),
+    Total_Profit = sum(Profit, na.rm = TRUE),
+    Profit_Per_Order = Total_Profit / Total_Orders
+  ) %>%
+  arrange(desc(Profit_Per_Order))
+
+print(profit_per_order)
+```
+
+### Suggest optimal shipping strategy
+
+📌 If a shipping mode has high sales but low profit margins:
+
+Consider increasing shipping fees or adjusting pricing.\
+Reduce unnecessary discounts on fast shipping.
+
+📌 If a shipping mode is unprofitable:
+
+Look at delivery costs—maybe it's too expensive for low-margin products.\
+Set a minimum order value for free/fast shipping.
+
+📌 If a shipping mode is highly profitable:
+
+Encourage customers to use this mode (e.g., make it the default).\
+Offer discounts for bulk orders to optimize shipping costs.
